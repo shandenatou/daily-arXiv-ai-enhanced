@@ -109,6 +109,7 @@ jobs:
         export OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}
         export LANGUAGE="${{ vars.LANGUAGE }}"
         export MODEL_NAME="${{ vars.MODEL_NAME }}"
+        export TOPIC_FILTER="${{ vars.TOPIC_FILTER }}"
         
         python enhance.py --data ../data/${today}.jsonl
         

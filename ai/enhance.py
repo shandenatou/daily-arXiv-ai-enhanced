@@ -21,6 +21,7 @@ from langchain.prompts import (
     HumanMessagePromptTemplate,
 )
 from structure import Structure
+from topic_filter import filter_papers_by_topics
 
 if os.path.exists('.env'):
     dotenv.load_dotenv()
@@ -218,6 +219,7 @@ def main():
     args = parse_args()
     model_name = os.environ.get("MODEL_NAME", 'deepseek-chat')
     language = os.environ.get("LANGUAGE", 'Chinese')
+    topic_filter = os.environ.get("TOPIC_FILTER", "")
 
     # 检查并删除目标文件
     target_file = args.data.replace('.jsonl', f'_AI_enhanced_{language}.jsonl')
@@ -241,6 +243,19 @@ def main():
 
     data = unique_data
     print('Open:', args.data, file=sys.stderr)
+
+    # Filter by configured research topics before making paid LLM calls.
+    if topic_filter.strip():
+        unfiltered_count = len(data)
+        data, topic_counts = filter_papers_by_topics(data, topic_filter)
+        counts_text = ", ".join(
+            f"{topic}={count}" for topic, count in topic_counts.items()
+        )
+        print(
+            f"Topic filter kept {len(data)}/{unfiltered_count} papers"
+            f" ({counts_text})",
+            file=sys.stderr,
+        )
     
     # 并行处理所有数据
     processed_data = process_all_items(
