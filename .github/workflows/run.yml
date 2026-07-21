@@ -5,12 +5,52 @@ name: arXiv-daily-ai-enhanced
 
 on:
   schedule:
-    - cron: "30 1 * * *"
+    # 23:30 Asia/Shanghai (15:30 UTC): primary daily update
+    - cron: "30 15 * * *"
+    # 00:30 Asia/Shanghai (16:30 UTC): backup for the same UTC date
+    - cron: "30 16 * * *"
   workflow_dispatch:
 
+concurrency:
+  group: daily-arxiv-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
 
 jobs:
+  precheck:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.daily_output.outputs.should_run }}
+    steps:
+    - name: Check whether today's output already exists
+      id: daily_output
+      env:
+        GH_TOKEN: ${{ github.token }}
+        LANGUAGE: ${{ vars.LANGUAGE }}
+      run: |
+        # Manual runs always proceed, so they can be used to retry or rebuild a day.
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "Manual run requested; continuing."
+          exit 0
+        fi
+
+        today=$(date -u "+%Y-%m-%d")
+        output_path="data/${today}_AI_enhanced_${LANGUAGE}.jsonl"
+
+        if gh api --silent "repos/${{ github.repository }}/contents/${output_path}?ref=data" >/dev/null 2>&1; then
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+          echo "Today's output already exists at ${output_path}; skipping backup run."
+        else
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "Today's output is missing at ${output_path}; starting update."
+        fi
+
   build:
+    needs: precheck
+    if: needs.precheck.outputs.should_run == 'true'
 
     runs-on: ubuntu-latest
 
