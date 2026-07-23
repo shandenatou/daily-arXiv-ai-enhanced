@@ -11,7 +11,19 @@
 import json
 import sys
 import os
+import argparse
 from datetime import datetime, timedelta
+
+
+def parse_args():
+    """Parse the workflow's explicit target date."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--date",
+        required=True,
+        help="Target date in YYYY-MM-DD format. Must match the crawler output date.",
+    )
+    return parser.parse_args()
 
 def load_papers_data(file_path):
     """
@@ -60,7 +72,7 @@ def save_papers_data(papers, file_path):
         print(f"Error saving {file_path}: {e}", file=sys.stderr)
         return False
 
-def perform_deduplication():
+def perform_deduplication(target_date):
     """
     执行多日去重：删除与历史多日重复的论文条目，保留新内容
     Perform deduplication over multiple past days
@@ -69,29 +81,43 @@ def perform_deduplication():
         str: 去重状态 / Deduplication status
              - "has_new_content": 有新内容 / Has new content
              - "no_new_content": 无新内容 / No new content  
-             - "no_data": 无数据 / No data
              - "error": 处理错误 / Processing error
     """
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_file = f"../data/{today}.jsonl"
+    try:
+        base_date = datetime.strptime(target_date, "%Y-%m-%d")
+    except ValueError:
+        print(
+            f"无效目标日期: {target_date} / Invalid target date: {target_date}",
+            file=sys.stderr,
+        )
+        return "error"
+
+    today_file = f"../data/{target_date}.jsonl"
     history_days = 7  # 向前追溯几天的数据进行对比
 
     if not os.path.exists(today_file):
-        print("今日数据文件不存在 / Today's data file does not exist", file=sys.stderr)
-        return "no_data"
+        print(
+            f"目标数据文件不存在: {today_file} / Target data file does not exist: {today_file}",
+            file=sys.stderr,
+        )
+        return "error"
 
     try:
         today_papers, today_ids = load_papers_data(today_file)
         print(f"今日论文总数: {len(today_papers)} / Today's total papers: {len(today_papers)}", file=sys.stderr)
 
         if not today_papers:
-            return "no_data"
+            print(
+                f"目标数据文件为空: {today_file} / Target data file is empty: {today_file}",
+                file=sys.stderr,
+            )
+            return "error"
 
         # 收集历史多日 ID 集合
         history_ids = set()
         for i in range(1, history_days + 1):
-            date_str = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            date_str = (base_date - timedelta(days=i)).strftime("%Y-%m-%d")
             history_file = f"../data/{date_str}.jsonl"
             _, past_ids = load_papers_data(history_file)
             history_ids.update(past_ids)
@@ -140,18 +166,17 @@ def main():
     """
     
     print("正在执行去重检查... / Performing intelligent deduplication check...", file=sys.stderr)
-    
+
+    args = parse_args()
+
     # 执行去重处理 / Perform deduplication processing
-    dedup_status = perform_deduplication()
+    dedup_status = perform_deduplication(args.date)
     
     if dedup_status == "has_new_content":
         print("✅ 去重完成，发现新内容，继续工作流 / Deduplication completed, new content found, continue workflow", file=sys.stderr)
         sys.exit(0)
     elif dedup_status == "no_new_content":
         print("⏹️ 去重完成，无新内容，停止工作流 / Deduplication completed, no new content, stop workflow", file=sys.stderr)
-        sys.exit(1)
-    elif dedup_status == "no_data":
-        print("⏹️ 今日无数据，停止工作流 / No data today, stop workflow", file=sys.stderr)
         sys.exit(1)
     elif dedup_status == "error":
         print("❌ 去重处理出错，停止工作流 / Deduplication processing error, stop workflow", file=sys.stderr)
