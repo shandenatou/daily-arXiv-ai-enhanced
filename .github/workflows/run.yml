@@ -5,12 +5,19 @@ name: arXiv-daily-ai-enhanced
 
 on:
   schedule:
-    # 00:30 Asia/Shanghai (16:30 UTC): early nightly attempt
-    - cron: "30 16 * * *"
-    # 09:30 Asia/Shanghai (01:30 UTC): reliable run after arXiv's daily update
-    - cron: "30 1 * * *"
-    # 11:30 Asia/Shanghai (03:30 UTC): guarded recovery run
-    - cron: "30 3 * * *"
+    # 09:37 Asia/Shanghai (01:37 UTC): primary run after arXiv's daily update.
+    # Use an off-peak minute because GitHub warns that scheduled runs can be
+    # delayed or dropped during periods of high load.
+    - cron: "37 1 * * *"
+    # 11:47 Asia/Shanghai (03:47 UTC): guarded recovery run.
+    - cron: "47 3 * * *"
+  # A repair to the workflow or its date-handling code should validate itself.
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/run.yml"
+      - "daily_arxiv/daily_arxiv/check_stats.py"
   workflow_dispatch:
     inputs:
       run_date:
@@ -102,10 +109,13 @@ jobs:
     - name: Crawl arXiv papers
       id: crawl_step
       run: |
+        set -euo pipefail
         source .venv/bin/activate
         today="$TARGET_DATE"
         echo "开始爬取 $today 的arXiv论文... / Starting to crawl $today arXiv papers..."
-        
+
+        mkdir -p data
+
         # 检查今日文件是否已存在，如存在则删除 / Check if today's file exists, delete if found
         if [ -f "data/${today}.jsonl" ]; then
             echo "🗑️ 发现今日文件已存在，正在删除重新生成... / Found existing today's file, deleting for fresh start..."
@@ -128,24 +138,27 @@ jobs:
         scrapy crawl arxiv -o ../data/${today}.jsonl
         
         # 检查爬取是否成功 / Check if crawling was successful
-        if [ ! -f "../data/${today}.jsonl" ]; then
-            echo "爬取失败，未生成数据文件 / Crawling failed, no data file generated"
+        if [ ! -s "../data/${today}.jsonl" ]; then
+            echo "::error::爬取失败，目标数据文件不存在或为空: data/${today}.jsonl / Crawling failed: target data file is missing or empty"
             exit 1
         fi
-        
+
+        paper_count=$(wc -l < "../data/${today}.jsonl")
+        echo "已抓取 ${paper_count} 篇论文 / Crawled ${paper_count} papers"
         echo "crawl_date=$today" >> "$GITHUB_OUTPUT"
         echo "爬取完成 / Crawling completed"
         
     - name: Check for duplicates
       id: dedup_check
       run: |
+        set -u
         source .venv/bin/activate
-        echo "执行去重检查... / Performing intelligent deduplication check..."
+        echo "执行 $TARGET_DATE 的去重检查... / Performing intelligent deduplication check for $TARGET_DATE..."
         
         cd daily_arxiv
         # 执行去重检查脚本 / Execute intelligent deduplication check script
         set +e  # 暂时允许命令失败 / Temporarily allow command failure
-        python daily_arxiv/check_stats.py
+        python daily_arxiv/check_stats.py --date "$TARGET_DATE"
         
         # 获取退出码 / Get exit code
         dedup_exit_code=$?
@@ -245,13 +258,6 @@ jobs:
           fi
           echo "Validated $output_file ($(wc -c < "$output_file") bytes)"
         done
-
-    - name: Update file list
-      if: steps.dedup_check.outputs.has_new_content == 'true'
-      run: |
-        echo "更新文件列表... / Updating file list..."
-        ls data/*.jsonl | sed 's|data/||' > assets/file-list.txt
-        echo "文件列表更新完成 / File list updated"
 
     - name: Generate password hash and inject into config
       if: steps.dedup_check.outputs.has_new_content == 'true'
@@ -383,11 +389,9 @@ jobs:
         
         # 创建临时目录保存数据文件 / Create temporary directory to save data files
         mkdir -p /tmp/data_files/data
-        mkdir -p /tmp/data_files/assets
         
         # 复制数据文件到临时目录 / Copy data files to temporary directory
         cp -r data/* /tmp/data_files/data/ 2>/dev/null || true
-        cp assets/file-list.txt /tmp/data_files/assets/ 2>/dev/null || true
         
         echo "数据文件已保存到临时目录 / Data files saved to temporary directory"
 
@@ -431,7 +435,16 @@ jobs:
         # 确保目录存在 / Ensure directories exist
         mkdir -p data assets
         cp -r /tmp/data_files/data/* data/ 2>/dev/null || true
-        cp /tmp/data_files/assets/file-list.txt assets/ 2>/dev/null || true
+
+        # Rebuild the index only after merging today's files with the existing
+        # data branch. Building it on main would silently discard older dates.
+        find data -maxdepth 1 -type f -name '*.jsonl' -printf '%f\n' \
+          | sort > assets/file-list.txt
+        if [ ! -s assets/file-list.txt ]; then
+          echo "::error::Failed to rebuild assets/file-list.txt"
+          exit 1
+        fi
+        echo "文件列表包含 $(wc -l < assets/file-list.txt) 个数据文件 / Rebuilt complete file list"
         
         # 只添加数据文件 / Only add data files
         git add data/* 2>/dev/null || true
@@ -486,4 +499,3 @@ jobs:
           fi
           echo "Published $published_path ($published_size bytes)"
         done
-
