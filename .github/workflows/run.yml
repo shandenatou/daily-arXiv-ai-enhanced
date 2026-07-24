@@ -5,12 +5,11 @@ name: arXiv-daily-ai-enhanced
 
 on:
   schedule:
-    # 09:37 Asia/Shanghai (01:37 UTC): primary run after arXiv's daily update.
-    # Use an off-peak minute because GitHub warns that scheduled runs can be
-    # delayed or dropped during periods of high load.
-    - cron: "37 1 * * *"
-    # 11:47 Asia/Shanghai (03:47 UTC): guarded recovery run.
-    - cron: "47 3 * * *"
+    # Guard window: every 30 minutes from 09:17 through 13:47 Asia/Shanghai.
+    # GitHub may delay or drop individual scheduled events during high load,
+    # so several off-peak attempts are used. The precheck below makes all
+    # later attempts exit quickly after the day's complete output exists.
+    - cron: "17,47 1-5 * * *"
   # A repair to the workflow or its date-handling code should validate itself.
   push:
     branches:
