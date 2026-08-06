@@ -98,7 +98,14 @@ class ZoteroClient:
         self.user_id = user_id
         self.api_key = api_key
 
-    def request(self, method: str, path: str, payload: object | None = None) -> object:
+    def request(
+        self,
+        method: str,
+        path: str,
+        payload: object | None = None,
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> object:
         data = None
         headers = {
             "Zotero-API-Key": self.api_key,
@@ -108,6 +115,8 @@ class ZoteroClient:
         if payload is not None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json; charset=utf-8"
+        if extra_headers:
+            headers.update(extra_headers)
         request = urllib.request.Request(
             API_BASE + path,
             method=method,
