@@ -2,8 +2,8 @@
 """Generate a private, personalized daily Top 10 report with DeepSeek.
 
 The input is the repository's AI-enhanced JSONL. The generated Markdown is
-kept on the ephemeral runner and passed directly to Zotero; only SHA-256
-hashes of recommended arXiv IDs are persisted for future deduplication.
+kept on the ephemeral runner and passed directly to Zotero. Deduplication
+state is loaded from and saved to the user's private Zotero library.
 """
 
 from __future__ import annotations
