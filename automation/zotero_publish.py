@@ -201,6 +201,7 @@ def main() -> int:
             {"tag": "daily-paper-recommendations"},
             {"tag": "Top 10"},
             {"tag": "LingBotVA"},
+            {"tag": f"日报 {run_date}"},
             {"tag": f"daily-report:{run_date}"},
             *({"tag": f"top5:{arxiv_id}"} for arxiv_id in top5),
         ],
