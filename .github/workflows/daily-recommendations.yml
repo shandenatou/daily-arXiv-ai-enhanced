@@ -4,6 +4,8 @@ on:
   schedule:
     # 09:00, then every 30 minutes through 13:30 Asia/Shanghai (UTC+8).
     - cron: "0,30 1-5 * * *"
+    # 15:00 Asia/Shanghai: file locally imported PDFs into today's collection.
+    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       run_date:
@@ -12,6 +14,11 @@ on:
         type: string
       dry_run:
         description: "Generate and validate without writing to Zotero or dedupe state"
+        required: false
+        default: false
+        type: boolean
+      organize_only:
+        description: "Only organize existing Zotero reports and papers into dated collections"
         required: false
         default: false
         type: boolean
@@ -43,6 +50,7 @@ jobs:
         env:
           INPUT_RUN_DATE: ${{ inputs.run_date }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_ORGANIZE_ONLY: ${{ inputs.organize_only }}
           ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
         run: |
           set -euo pipefail
@@ -57,6 +65,12 @@ jobs:
             exit 1
           fi
           echo "target_date=$target_date" >> "$GITHUB_OUTPUT"
+
+          if [ "${INPUT_ORGANIZE_ONLY:-false}" = "true" ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Organize-only run: skipping report generation."
+            exit 0
+          fi
 
           if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
@@ -152,3 +166,17 @@ jobs:
         run: |
           set -euo pipefail
           python automation/zotero_dedupe.py save --input /tmp/dedupe-next.json
+
+      - name: Organize Zotero reports and papers into dated collections
+        if: inputs.dry_run != true
+        env:
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+          TARGET_DATE: ${{ steps.precheck.outputs.target_date }}
+          ORGANIZE_ONLY: ${{ inputs.organize_only }}
+        run: |
+          set -euo pipefail
+          if [ "${ORGANIZE_ONLY:-false}" = "true" ]; then
+            python automation/zotero_organize.py --all
+          else
+            python automation/zotero_organize.py --date "$TARGET_DATE"
+          fi
