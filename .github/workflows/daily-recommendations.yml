@@ -1,0 +1,170 @@
+name: Daily LingBotVA Recommendations to Zotero
+
+on:
+  schedule:
+    # 09:00, then every 30 minutes through 13:30 Asia/Shanghai (UTC+8).
+    - cron: "0,30 1-5 * * *"
+  workflow_dispatch:
+    inputs:
+      run_date:
+        description: "Asia/Shanghai date (YYYY-MM-DD); empty means today"
+        required: false
+        type: string
+      dry_run:
+        description: "Generate and validate without writing to Zotero or dedupe state"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: daily-lingbot-recommendations
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  recommend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      LANGUAGE: ${{ vars.LANGUAGE }}
+      MODEL_NAME: ${{ vars.MODEL_NAME }}
+      TOPIC_FILTER: ${{ vars.TOPIC_FILTER }}
+      ZOTERO_USER_ID: ${{ vars.ZOTERO_USER_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve date and check Zotero
+        id: precheck
+        env:
+          INPUT_RUN_DATE: ${{ inputs.run_date }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_RUN_DATE:-}" ]; then
+            target_date="$INPUT_RUN_DATE"
+          else
+            target_date=$(TZ=Asia/Shanghai date '+%Y-%m-%d')
+          fi
+          if [[ ! "$target_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || \
+             [ "$(date -d "$target_date" '+%Y-%m-%d' 2>/dev/null || true)" != "$target_date" ]; then
+            echo "::error::Invalid run_date: $target_date"
+            exit 1
+          fi
+          echo "target_date=$target_date" >> "$GITHUB_OUTPUT"
+
+          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Dry run: skipping the existing-report check."
+            exit 0
+          fi
+
+          existing=$(curl --fail --silent --show-error --get \
+            -H "Zotero-API-Key: $ZOTERO_API_KEY" \
+            -H "Zotero-API-Version: 3" \
+            --data-urlencode "tag=daily-report:$target_date" \
+            --data-urlencode "itemType=report" \
+            --data-urlencode "limit=1" \
+            "https://api.zotero.org/users/$ZOTERO_USER_ID/items")
+          if [ "$(jq 'length' <<< "$existing")" -gt 0 ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Zotero already contains the report for $target_date; skipping."
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Obtain today's enhanced paper data
+        id: input
+        if: steps.precheck.outputs.should_run == 'true'
+        env:
+          TARGET_DATE: ${{ steps.precheck.outputs.target_date }}
+        run: |
+          set -euo pipefail
+          input_path="data/${TARGET_DATE}_AI_enhanced_${LANGUAGE}.jsonl"
+          if gh api "repos/${{ github.repository }}/contents/${input_path}?ref=data" \
+            -H 'Accept: application/vnd.github.raw+json' > /tmp/enhanced.jsonl 2>/dev/null && \
+             [ -s /tmp/enhanced.jsonl ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Enhanced input is ready: $input_path"
+            exit 0
+          fi
+
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          active_runs=$(gh run list --workflow run.yml --limit 20 --json status \
+            --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending")] | length')
+          if [ "$active_runs" -eq 0 ]; then
+            gh workflow run run.yml --ref main -f "run_date=$TARGET_DATE"
+            echo "Enhanced input is not ready; dispatched the crawler for $TARGET_DATE."
+          else
+            echo "Enhanced input is not ready; crawler is already active."
+          fi
+
+      - name: Load private deduplication state
+        if: steps.precheck.outputs.should_run == 'true' && steps.input.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          if ! gh api "repos/${{ github.repository }}/contents/data/recommendations/dedupe.json?ref=data" \
+            -H 'Accept: application/vnd.github.raw+json' > /tmp/dedupe.json 2>/dev/null; then
+            printf '%s\n' '{"version":1,"recommended_id_hashes":[]}' > /tmp/dedupe.json
+          fi
+
+      - name: Generate and validate personalized Top 10
+        if: steps.precheck.outputs.should_run == 'true' && steps.input.outputs.ready == 'true'
+        env:
+          TARGET_DATE: ${{ steps.precheck.outputs.target_date }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          RECOMMENDATION_MAX_TOKENS: "32768"
+        run: |
+          set -euo pipefail
+          python automation/daily_recommendations.py \
+            --input /tmp/enhanced.jsonl \
+            --date "$TARGET_DATE" \
+            --dedupe /tmp/dedupe.json \
+            --output /tmp/daily-report.md \
+            --selection /tmp/selection.json \
+            --dedupe-output /tmp/dedupe-next.json
+
+      - name: Publish report and machine-readable Top 5 to Zotero
+        if: steps.precheck.outputs.should_run == 'true' && steps.input.outputs.ready == 'true' && inputs.dry_run != true
+        env:
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+        run: |
+          set -euo pipefail
+          python automation/zotero_publish.py --selection /tmp/selection.json
+
+      - name: Validate Zotero payload without publishing
+        if: steps.precheck.outputs.should_run == 'true' && steps.input.outputs.ready == 'true' && inputs.dry_run == true
+        env:
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+        run: |
+          set -euo pipefail
+          python automation/zotero_publish.py --selection /tmp/selection.json --dry-run
+
+      - name: Persist only hashed deduplication state
+        if: steps.precheck.outputs.should_run == 'true' && steps.input.outputs.ready == 'true' && inputs.dry_run != true
+        env:
+          TARGET_DATE: ${{ steps.precheck.outputs.target_date }}
+        run: |
+          set -euo pipefail
+          api_path="repos/${{ github.repository }}/contents/data/recommendations/dedupe.json"
+          current_sha=$(gh api "${api_path}?ref=data" --jq '.sha' 2>/dev/null || true)
+          encoded=$(base64 -w 0 /tmp/dedupe-next.json)
+          if [ -n "$current_sha" ]; then
+            gh api --method PUT "$api_path" \
+              -f "message=Update private recommendation dedupe hashes for $TARGET_DATE" \
+              -f "content=$encoded" \
+              -f "branch=data" \
+              -f "sha=$current_sha" > /dev/null
+          else
+            gh api --method PUT "$api_path" \
+              -f "message=Initialize private recommendation dedupe hashes for $TARGET_DATE" \
+              -f "content=$encoded" \
+              -f "branch=data" > /dev/null
+          fi
+          echo "Stored dedupe hashes only; report text remains in Zotero."
