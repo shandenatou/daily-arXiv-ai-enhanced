@@ -22,7 +22,7 @@ concurrency:
 
 permissions:
   actions: write
-  contents: write
+  contents: read
 
 jobs:
   recommend:
@@ -104,14 +104,13 @@ jobs:
             echo "Enhanced input is not ready; crawler is already active."
           fi
 
-      - name: Load private deduplication state
+      - name: Load private deduplication state from Zotero
         if: steps.precheck.outputs.should_run == 'true' && steps.input.outputs.ready == 'true'
+        env:
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
         run: |
           set -euo pipefail
-          if ! gh api "repos/${{ github.repository }}/contents/data/recommendations/dedupe.json?ref=data" \
-            -H 'Accept: application/vnd.github.raw+json' > /tmp/dedupe.json 2>/dev/null; then
-            printf '%s\n' '{"version":1,"recommended_id_hashes":[]}' > /tmp/dedupe.json
-          fi
+          python automation/zotero_dedupe.py load --output /tmp/dedupe.json
 
       - name: Generate and validate personalized Top 10
         if: steps.precheck.outputs.should_run == 'true' && steps.input.outputs.ready == 'true'
@@ -146,25 +145,10 @@ jobs:
           set -euo pipefail
           python automation/zotero_publish.py --selection /tmp/selection.json --dry-run
 
-      - name: Persist only hashed deduplication state
+      - name: Save private deduplication state to Zotero
         if: steps.precheck.outputs.should_run == 'true' && steps.input.outputs.ready == 'true' && inputs.dry_run != true
         env:
-          TARGET_DATE: ${{ steps.precheck.outputs.target_date }}
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
         run: |
           set -euo pipefail
-          api_path="repos/${{ github.repository }}/contents/data/recommendations/dedupe.json"
-          current_sha=$(gh api "${api_path}?ref=data" --jq '.sha' 2>/dev/null || true)
-          encoded=$(base64 -w 0 /tmp/dedupe-next.json)
-          if [ -n "$current_sha" ]; then
-            gh api --method PUT "$api_path" \
-              -f "message=Update private recommendation dedupe hashes for $TARGET_DATE" \
-              -f "content=$encoded" \
-              -f "branch=data" \
-              -f "sha=$current_sha" > /dev/null
-          else
-            gh api --method PUT "$api_path" \
-              -f "message=Initialize private recommendation dedupe hashes for $TARGET_DATE" \
-              -f "content=$encoded" \
-              -f "branch=data" > /dev/null
-          fi
-          echo "Stored dedupe hashes only; report text remains in Zotero."
+          python automation/zotero_dedupe.py save --input /tmp/dedupe-next.json
