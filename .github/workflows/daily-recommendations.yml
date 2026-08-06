@@ -36,7 +36,7 @@ jobs:
       ZOTERO_USER_ID: ${{ vars.ZOTERO_USER_ID }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
       - name: Resolve date and check Zotero
         id: precheck
