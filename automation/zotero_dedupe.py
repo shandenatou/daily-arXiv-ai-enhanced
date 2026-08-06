@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -20,6 +21,7 @@ from zotero_publish import ZoteroClient
 STATE_TAG = "daily-paper-dedupe-state"
 STATE_MARKER = 'data-daily-paper-dedupe="true"'
 HASH_RE = re.compile(r"[0-9a-f]{64}")
+ARXIV_RE = re.compile(r"arxiv\.org/abs/([0-9]{4}\.[0-9]{4,5})(?:v\d+)?", re.IGNORECASE)
 
 
 def empty_state() -> dict:
@@ -110,11 +112,47 @@ def find_state_note(client: ZoteroClient) -> dict | None:
     return items[0]
 
 
-def load(client: ZoteroClient) -> dict:
+def bootstrap_from_reports(client: ZoteroClient) -> dict:
+    hashes: set[str] = set()
+    start = 0
+    while True:
+        query = urllib.parse.urlencode(
+            {
+                "tag": "daily-paper-recommendations",
+                "itemType": "report",
+                "limit": "100",
+                "start": str(start),
+                "format": "json",
+            }
+        )
+        reports = client.request("GET", f"/users/{client.user_id}/items?{query}")
+        if not isinstance(reports, list):
+            raise RuntimeError("Zotero returned an invalid historical report list")
+        for report in reports:
+            key = report.get("key")
+            if not isinstance(key, str):
+                continue
+            children = client.request(
+                "GET",
+                f"/users/{client.user_id}/items/{key}/children?itemType=note&limit=100&format=json",
+            )
+            if not isinstance(children, list):
+                continue
+            for child in children:
+                note = child.get("data", {}).get("note", "")
+                for arxiv_id in ARXIV_RE.findall(note):
+                    hashes.add(hashlib.sha256(arxiv_id.lower().encode("utf-8")).hexdigest())
+        if len(reports) < 100:
+            break
+        start += len(reports)
+    return {"version": 1, "recommended_id_hashes": sorted(hashes)}
+
+
+def load(client: ZoteroClient) -> tuple[dict, bool]:
     existing = find_state_note(client)
     if not existing:
-        return empty_state()
-    return parse_note(existing.get("data", {}).get("note", ""))
+        return bootstrap_from_reports(client), True
+    return parse_note(existing.get("data", {}).get("note", "")), False
 
 
 def save(client: ZoteroClient, state: dict) -> str:
@@ -161,9 +199,10 @@ def main() -> int:
     user_id, api_key = credentials(args.api_key_stdin)
     client = ZoteroClient(user_id, api_key)
     if args.command == "load":
-        state = load(client)
+        state, bootstrapped = load(client)
         args.output.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-        print(f"Loaded {len(state['recommended_id_hashes'])} private dedupe hashes from Zotero.")
+        source = "historical Zotero reports" if bootstrapped else "the private Zotero state note"
+        print(f"Loaded {len(state['recommended_id_hashes'])} private dedupe hashes from {source}.")
         return 0
 
     state = validate_state(json.loads(args.input.read_text(encoding="utf-8")))
