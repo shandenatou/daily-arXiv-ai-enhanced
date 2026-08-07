@@ -414,7 +414,9 @@ def main() -> int:
             else:
                 print(f"[{index:02d}/30] reused {spec.short_name} ({spec.arxiv_id})")
         else:
-            created = client.create_one(build_item(spec, metadata, collection_keys))
+            created = client.create_one(
+                build_item(spec, metadata[spec.arxiv_id], collection_keys)
+            )
             parent_key = created["key"]
             created_items += 1
             print(f"[{index:02d}/30] created {spec.short_name} ({spec.arxiv_id})")
