@@ -1,0 +1,39 @@
+name: Curate WAM Zotero Library
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Validate the curated paper list without writing to Zotero"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: curate-wam-zotero-library
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  curate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ZOTERO_USER_ID: ${{ vars.ZOTERO_USER_ID }}
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Validate and curate WAM collection
+        env:
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
+            python automation/zotero_wam_library.py --dry-run
+          else
+            python automation/zotero_wam_library.py
+          fi
