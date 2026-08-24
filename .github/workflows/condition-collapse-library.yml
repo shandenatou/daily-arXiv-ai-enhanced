@@ -1,0 +1,39 @@
+name: Curate Condition-Collapse Zotero Library
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Validate without writing to Zotero"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: curate-condition-collapse-zotero-library
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  curate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ZOTERO_USER_ID: ${{ vars.ZOTERO_USER_ID }}
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Curate condition-collapse collection
+        env:
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
+            python automation/zotero_condition_collapse_library.py --dry-run
+          else
+            python automation/zotero_condition_collapse_library.py
+          fi
