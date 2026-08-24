@@ -91,42 +91,60 @@ def reparent_attachment(
     )
 
 
-def discover(client: ZoteroClient) -> tuple[dict[str, dict], dict[str, dict]]:
+def discover(client: ZoteroClient) -> tuple[dict[str, dict], dict[str, list[dict]]]:
     top_items = fetch_all(client, "items/top")
     canonical: dict[str, dict] = {}
-    staging: dict[str, dict] = {}
+    staging: dict[str, list[dict]] = {}
     expected = {spec.arxiv_id for spec in PAPERS}
     for item in top_items:
         arxiv_id = arxiv_id_from_item(item)
         if arxiv_id not in expected:
             continue
-        target = staging if STAGING_TAG in tags(item) else canonical
-        if arxiv_id in target:
-            raise RuntimeError(f"Duplicate {'staging' if target is staging else 'canonical'} item for {arxiv_id}")
-        target[arxiv_id] = item
+        if STAGING_TAG in tags(item):
+            staging.setdefault(arxiv_id, []).append(item)
+            continue
+        if arxiv_id in canonical:
+            raise RuntimeError(f"Duplicate canonical item for {arxiv_id}")
+        canonical[arxiv_id] = item
     return canonical, staging
 
 
 def wait_for_staging(
     client: ZoteroClient,
     wait_seconds: int,
-) -> tuple[dict[str, dict], dict[str, dict], dict[str, dict]]:
+) -> tuple[
+    dict[str, dict],
+    dict[str, list[dict]],
+    dict[str, dict],
+    dict[str, dict],
+]:
     expected = {spec.arxiv_id for spec in PAPERS}
     deadline = time.monotonic() + wait_seconds
     while True:
         canonical, staging = discover(client)
+        ready_staging: dict[str, dict] = {}
         ready_attachments: dict[str, dict] = {}
-        for arxiv_id, item in staging.items():
-            real = [value for value in children(client, item["key"]) if is_real_pdf(value)]
-            if len(real) > 1:
-                raise RuntimeError(f"Multiple staged PDF attachments for {arxiv_id}")
-            if real:
-                ready_attachments[arxiv_id] = real[0]
+        for arxiv_id, items in staging.items():
+            candidates: list[tuple[dict, dict]] = []
+            for item in items:
+                real = [
+                    value
+                    for value in children(client, item["key"])
+                    if is_real_pdf(value)
+                ]
+                if len(real) > 1:
+                    raise RuntimeError(f"Multiple PDF attachments under one staging item for {arxiv_id}")
+                if real:
+                    candidates.append((item, real[0]))
+            if len(candidates) > 1:
+                raise RuntimeError(f"Multiple staged PDF copies for {arxiv_id}")
+            if candidates:
+                ready_staging[arxiv_id], ready_attachments[arxiv_id] = candidates[0]
         missing_canonical = expected - set(canonical)
         missing_staging = expected - set(staging)
         missing_pdf = expected - set(ready_attachments)
         if not missing_canonical and not missing_staging and not missing_pdf:
-            return canonical, staging, ready_attachments
+            return canonical, staging, ready_staging, ready_attachments
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 "Timed out waiting for Zotero sync; "
@@ -151,13 +169,16 @@ def main() -> int:
         raise RuntimeError("ZOTERO_API_KEY and numeric ZOTERO_USER_ID are required")
     client = ZoteroClient(int(user_id), api_key)
 
-    canonical, staging, staged_pdfs = wait_for_staging(client, args.wait_seconds)
+    canonical, staging, ready_staging, staged_pdfs = wait_for_staging(
+        client, args.wait_seconds
+    )
     reparented = 0
     links_deleted = 0
     staging_deleted = 0
     for index, spec in enumerate(PAPERS, 1):
         canonical_item = canonical[spec.arxiv_id]
-        staging_item = staging[spec.arxiv_id]
+        staging_items = staging[spec.arxiv_id]
+        staging_item = ready_staging[spec.arxiv_id]
         canonical_children = children(client, canonical_item["key"])
         real_existing = [value for value in canonical_children if is_real_pdf(value)]
         if real_existing:
@@ -170,8 +191,9 @@ def main() -> int:
             if is_arxiv_pdf_link(linked, spec.arxiv_id):
                 delete_item(client, linked)
                 links_deleted += 1
-        delete_item(client, staging_item)
-        staging_deleted += 1
+        for temporary_item in staging_items:
+            delete_item(client, temporary_item)
+            staging_deleted += 1
         time.sleep(0.1)
 
     print(
