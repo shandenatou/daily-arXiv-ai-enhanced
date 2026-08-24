@@ -1,0 +1,28 @@
+name: Migrate Condition-Collapse PDFs
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: migrate-condition-collapse-pdfs
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ZOTERO_USER_ID: ${{ vars.ZOTERO_USER_ID }}
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Merge locally imported PDFs into canonical items
+        env:
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+        run: |
+          set -euo pipefail
+          python automation/zotero_condition_collapse_pdf_migration.py --wait-seconds 900
