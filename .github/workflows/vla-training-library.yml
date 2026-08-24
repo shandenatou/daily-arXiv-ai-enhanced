@@ -1,0 +1,39 @@
+name: Curate VLA Training Zotero Library
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Validate without writing to Zotero"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: curate-vla-training-zotero-library
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  curate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ZOTERO_USER_ID: ${{ vars.ZOTERO_USER_ID }}
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Curate VLA training-method collection
+        env:
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
+            python automation/zotero_vla_training_library.py --dry-run
+          else
+            python automation/zotero_vla_training_library.py
+          fi
