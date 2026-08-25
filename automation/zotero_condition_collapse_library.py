@@ -47,6 +47,7 @@ PAPERS = [
     PaperSpec("2608.04396", "CofactVLA", "直接诊断与干预"),
     PaperSpec("2512.11218", "BayesVLA", "直接诊断与干预"),
     PaperSpec("2607.13429", "Anchor-Align", "训练目标与后训练"),
+    PaperSpec("2605.15735", "UAM", "训练目标与后训练"),
     PaperSpec("2601.03136", "Limited Linguistic Diversity", "数据与评测"),
     PaperSpec("2606.27295", "LA4VLA", "数据与动作表征"),
     PaperSpec("2605.27284", "FineVLA", "数据与动作表征"),
@@ -300,8 +301,8 @@ def create_pdf_link(client: ZoteroClient, parent_key: str, spec: PaperSpec) -> N
 
 def validate_specs() -> None:
     ids = [spec.arxiv_id for spec in PAPERS]
-    if len(ids) != 17:
-        raise RuntimeError(f"Expected 17 unique papers, found {len(ids)}")
+    if len(ids) != 18:
+        raise RuntimeError(f"Expected 18 unique papers, found {len(ids)}")
     if len(set(ids)) != len(ids):
         raise RuntimeError("The condition-collapse list contains duplicate arXiv IDs")
 
@@ -354,16 +355,16 @@ def main() -> int:
             reused_items += 1
             if update_existing_item(client, item, spec, collection_key):
                 updated_items += 1
-                print(f"[{index:02d}/17] reused+updated {spec.short_name}")
+                print(f"[{index:02d}/{len(PAPERS)}] reused+updated {spec.short_name}")
             else:
-                print(f"[{index:02d}/17] reused {spec.short_name}")
+                print(f"[{index:02d}/{len(PAPERS)}] reused {spec.short_name}")
         else:
             created = client.create_one(
                 build_item(spec, metadata[spec.arxiv_id], collection_key)
             )
             parent_key = created["key"]
             created_items += 1
-            print(f"[{index:02d}/17] created {spec.short_name}")
+            print(f"[{index:02d}/{len(PAPERS)}] created {spec.short_name}")
         if not item_has_pdf(client, parent_key):
             create_pdf_link(client, parent_key, spec)
             pdf_links += 1

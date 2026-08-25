@@ -91,11 +91,14 @@ def reparent_attachment(
     )
 
 
-def discover(client: ZoteroClient) -> tuple[dict[str, dict], dict[str, list[dict]]]:
+def discover(
+    client: ZoteroClient,
+    papers: list,
+) -> tuple[dict[str, dict], dict[str, list[dict]]]:
     top_items = fetch_all(client, "items/top")
     canonical: dict[str, dict] = {}
     staging: dict[str, list[dict]] = {}
-    expected = {spec.arxiv_id for spec in PAPERS}
+    expected = {spec.arxiv_id for spec in papers}
     for item in top_items:
         arxiv_id = arxiv_id_from_item(item)
         if arxiv_id not in expected:
@@ -111,6 +114,7 @@ def discover(client: ZoteroClient) -> tuple[dict[str, dict], dict[str, list[dict
 
 def wait_for_staging(
     client: ZoteroClient,
+    papers: list,
     wait_seconds: int,
 ) -> tuple[
     dict[str, dict],
@@ -118,10 +122,11 @@ def wait_for_staging(
     dict[str, dict],
     dict[str, dict],
 ]:
-    expected = {spec.arxiv_id for spec in PAPERS}
+    expected = {spec.arxiv_id for spec in papers}
+    total = len(expected)
     deadline = time.monotonic() + wait_seconds
     while True:
-        canonical, staging = discover(client)
+        canonical, staging = discover(client, papers)
         ready_staging: dict[str, dict] = {}
         ready_attachments: dict[str, dict] = {}
         for arxiv_id, items in staging.items():
@@ -148,12 +153,12 @@ def wait_for_staging(
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 "Timed out waiting for Zotero sync; "
-                f"canonical={len(canonical)}/17 staging={len(staging)}/17 "
-                f"pdf={len(ready_attachments)}/17"
+                f"canonical={len(canonical)}/{total} staging={len(staging)}/{total} "
+                f"pdf={len(ready_attachments)}/{total}"
             )
         print(
-            f"Waiting for Zotero sync: canonical={len(canonical)}/17 "
-            f"staging={len(staging)}/17 pdf={len(ready_attachments)}/17",
+            f"Waiting for Zotero sync: canonical={len(canonical)}/{total} "
+            f"staging={len(staging)}/{total} pdf={len(ready_attachments)}/{total}",
             flush=True,
         )
         time.sleep(15)
@@ -162,7 +167,13 @@ def wait_for_staging(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--wait-seconds", type=int, default=900)
+    parser.add_argument("--arxiv-id")
     args = parser.parse_args()
+    papers = PAPERS
+    if args.arxiv_id:
+        papers = [spec for spec in PAPERS if spec.arxiv_id == args.arxiv_id]
+        if not papers:
+            raise RuntimeError(f"Unknown condition-collapse arXiv ID: {args.arxiv_id}")
     api_key = os.environ.get("ZOTERO_API_KEY", "").strip()
     user_id = os.environ.get("ZOTERO_USER_ID", "").strip()
     if not api_key or not user_id.isdigit():
@@ -170,23 +181,23 @@ def main() -> int:
     client = ZoteroClient(int(user_id), api_key)
 
     canonical, staging, ready_staging, staged_pdfs = wait_for_staging(
-        client, args.wait_seconds
+        client, papers, args.wait_seconds
     )
     reparented = 0
     links_deleted = 0
     staging_deleted = 0
-    for index, spec in enumerate(PAPERS, 1):
+    for index, spec in enumerate(papers, 1):
         canonical_item = canonical[spec.arxiv_id]
         staging_items = staging[spec.arxiv_id]
         staging_item = ready_staging[spec.arxiv_id]
         canonical_children = children(client, canonical_item["key"])
         real_existing = [value for value in canonical_children if is_real_pdf(value)]
         if real_existing:
-            print(f"[{index:02d}/17] canonical PDF already exists: {spec.short_name}")
+            print(f"[{index:02d}/{len(papers)}] canonical PDF already exists: {spec.short_name}")
         else:
             reparent_attachment(client, staged_pdfs[spec.arxiv_id], canonical_item["key"])
             reparented += 1
-            print(f"[{index:02d}/17] attached real PDF: {spec.short_name}")
+            print(f"[{index:02d}/{len(papers)}] attached real PDF: {spec.short_name}")
         for linked in canonical_children:
             if is_arxiv_pdf_link(linked, spec.arxiv_id):
                 delete_item(client, linked)
@@ -199,7 +210,7 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "papers": len(PAPERS),
+                "papers": len(papers),
                 "real_pdfs_reparented": reparented,
                 "old_pdf_links_deleted": links_deleted,
                 "staging_items_deleted": staging_deleted,

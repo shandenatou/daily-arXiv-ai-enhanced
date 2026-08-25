@@ -2,6 +2,11 @@ name: Migrate Condition-Collapse PDFs
 
 on:
   workflow_dispatch:
+    inputs:
+      arxiv_id:
+        description: Optional single arXiv ID to migrate
+        required: false
+        type: string
 
 concurrency:
   group: migrate-condition-collapse-pdfs
@@ -23,6 +28,11 @@ jobs:
       - name: Merge locally imported PDFs into canonical items
         env:
           ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+          ARXIV_ID: ${{ inputs.arxiv_id }}
         run: |
           set -euo pipefail
-          python automation/zotero_condition_collapse_pdf_migration.py --wait-seconds 900
+          args=(--wait-seconds 900)
+          if [[ -n "${ARXIV_ID}" ]]; then
+            args+=(--arxiv-id "${ARXIV_ID}")
+          fi
+          python automation/zotero_condition_collapse_pdf_migration.py "${args[@]}"
