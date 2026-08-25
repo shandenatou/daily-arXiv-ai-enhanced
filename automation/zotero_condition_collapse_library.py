@@ -48,6 +48,7 @@ PAPERS = [
     PaperSpec("2512.11218", "BayesVLA", "直接诊断与干预"),
     PaperSpec("2607.13429", "Anchor-Align", "训练目标与后训练"),
     PaperSpec("2605.15735", "UAM", "训练目标与后训练"),
+    PaperSpec("2505.23705", "Knowledge Insulation", "训练目标与后训练"),
     PaperSpec("2504.16054", "π0.5", "数据与动作表征"),
     PaperSpec("2605.30280", "Qwen-VLA", "数据与动作表征"),
     PaperSpec("2601.03136", "Limited Linguistic Diversity", "数据与评测"),
@@ -303,8 +304,8 @@ def create_pdf_link(client: ZoteroClient, parent_key: str, spec: PaperSpec) -> N
 
 def validate_specs() -> None:
     ids = [spec.arxiv_id for spec in PAPERS]
-    if len(ids) != 20:
-        raise RuntimeError(f"Expected 20 unique papers, found {len(ids)}")
+    if len(ids) != 21:
+        raise RuntimeError(f"Expected 21 unique papers, found {len(ids)}")
     if len(set(ids)) != len(ids):
         raise RuntimeError("The condition-collapse list contains duplicate arXiv IDs")
 
